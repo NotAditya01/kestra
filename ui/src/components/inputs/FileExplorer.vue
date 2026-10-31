@@ -370,7 +370,9 @@
 
     export const FILES_OPEN_TAB_INJECTION_KEY = Symbol("files-open-tab-injection-key") as InjectionKey<(tab: EditorTabProps) => void>
     /** Returns whether a tab was actually open for that path, so callers can reopen it elsewhere. */
-    export const FILES_CLOSE_TAB_INJECTION_KEY = Symbol("files-close-tab-injection-key") as InjectionKey<(tab: {path: string}) => boolean>
+    export const FILES_CLOSE_TAB_INJECTION_KEY = Symbol("files-close-tab-injection-key") as InjectionKey<(tab: {path: string; folder?: boolean}) => boolean>
+    /** Points the tabs open at `from`, or under it when it is a folder, at `to`, keeping unsaved edits. */
+    export const FILES_MOVE_TABS_INJECTION_KEY = Symbol("files-move-tabs-injection-key") as InjectionKey<(move: {from: string; to: string}) => void>
 </script>
 
 <script lang="ts" setup>
@@ -427,6 +429,7 @@
 
     const openTab = inject(FILES_OPEN_TAB_INJECTION_KEY)
     const closeTab = inject(FILES_CLOSE_TAB_INJECTION_KEY)
+    const moveTabs = inject(FILES_MOVE_TABS_INJECTION_KEY, undefined)
     const refreshTabContent = inject(FILES_REFRESH_CONTENT_INJECTION_KEY, undefined)
 
     // exposed so parents (e.g. the dedicated empty state) can reuse the
@@ -810,7 +813,7 @@
         // without this a second Enter fires a duplicate rename whose `old` path is already gone.
         if (!canManageFiles.value || isRenaming.value) return
 
-        const {node, old: oldName, name: newName, type} = renameDialog.value
+        const {node, old: oldName, name: newName} = renameDialog.value
         if (!newName) return
 
         const path = node?.data.id ? filesStore.getPath(node.data.id) ?? "" : ""
@@ -839,17 +842,9 @@
         tree.value.getNode(node).data.fileName = newName
         renameDialog.value = {...RENAME_DEFAULTS}
 
-        // Tabs are keyed by path, so a renamed file left one pointing at a path that no longer
-        // exists — clicking it navigated to a full-page 404. Move it across instead.
-        if (type === "file" && closeTab?.({path: oldPath})) {
-            openTab?.({
-                name: newName,
-                path: newPath,
-                extension: newName.split(".").pop()!,
-                flow: false,
-                dirty: false,
-            })
-        }
+        // Tabs are keyed by path, so a renamed file or folder left them pointing at a path that
+        // no longer exists. Move them across, unsaved edits included.
+        moveTabs?.({from: oldPath, to: newPath})
     }
 
     function onNodeDragStart(draggingNode: ElTreeNode) {
@@ -914,6 +909,7 @@
                 bulkDragSiblings.value = undefined
                 return
             }
+            moveTabs?.({from: oldPath, to: newPath})
         }
 
         const siblings = bulkDragSiblings.value
@@ -928,12 +924,13 @@
             return
         }
 
-        const results = await Promise.allSettled(moves.map((move) =>
-            namespacesStore.moveFileDirectory({
+        const results = await Promise.allSettled(moves.map(async (move) => {
+            await namespacesStore.moveFileDirectory({
                 namespace: namespaceId.value,
                 ...move,
-            }),
-        ))
+            })
+            moveTabs?.({from: move.old, to: move.new})
+        }))
 
         await filesStore.loadNodes()
         selectedNodes.value = []
@@ -1030,8 +1027,10 @@
                     path,
                 })
                 tree.value.remove(node.id)
+                // a deleted folder takes the tabs of everything inside it along
                 closeTab?.({
                     path,
+                    folder: !node.leaf,
                 })
             } catch (error) {
                 console.error(`Failed to delete file: ${node.fileName}`, error)
