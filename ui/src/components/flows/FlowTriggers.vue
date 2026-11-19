@@ -387,7 +387,8 @@
 
     import {useToast} from "../../utils/toast"
     import {storageKeys} from "../../utils/constants"
-    import {hasMissingRequiredInputs} from "../../utils/inputs"
+    import {flattenInputs, hasMissingRequiredInputs} from "../../utils/inputs"
+    import {normalizeInputValues} from "../../utils/submitTask"
 
     import {useFlowStore} from "../../stores/flow"
     import {useAuthStore} from "override/stores/auth"
@@ -574,8 +575,9 @@
         return {
             start: backfill.value.start?.toISOString(),
             end: backfill.value.end?.toISOString(),
+            // formatted like Execute does, e.g. a DATE as `2026-01-15`, not the picker's Date
             // the spec models the endpoint's Map<String, Object> inputs as a map of maps
-            inputs: (backfill.value.inputs ?? undefined) as BackfillRequest["inputs"],
+            inputs: normalizeInputValues(flattenInputs(flowStore.flow?.inputs), backfill.value.inputs ?? {}) as BackfillRequest["inputs"],
             labels: labels.length ? labels : undefined,
         }
     })
